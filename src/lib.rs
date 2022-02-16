@@ -1,12 +1,19 @@
-use near_sdk::{env, near_bindgen, AccountId, PanicOnDefault, Promise};
+use near_sdk::{env, near_bindgen, AccountId, PanicOnDefault, Promise, Gas, Balance};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::collections::{LookupMap, UnorderedMap, UnorderedSet};
 use near_sdk::BorshStorageKey;
 use near_sdk::json_types::U128;
+//use near_sdk::env::{account_balance};
 //use near_sdk::env::{account_balance, current_account_id};
 
-const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000; // 1 $NEAR as yoctoNEAR
+use near_sdk::ext_contract;
+
+
+const NO_DEPOSIT: Balance = 0;
+const BASE_GAS: Gas = 300_000_000_000_000;
+
+const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
 
 /*******************************/
 /*********** STRUCTS ***********/
@@ -210,15 +217,58 @@ impl Contract {
         })
     }
 
-    //pub fn transfer() -> Promise {  //should be private, and only be called under some conditions
-    //    let amount = env::account_balance() - 20*ONE_NEAR;  // should be replace by the amount transfered
-    //    Promise::new(receiver_id).transfer(amount)
-    //}
+    // TODO: CHECK STATUS UPDATE
+    #[payable]
+    pub fn transfer_to_lock(&mut self, transaction_id: TransactionId) {  //should be private, and only be called under some conditions
+
+        env::log(format!("Before Transfer: {}", env::account_balance()/YOCTO_NEAR).as_bytes());
+        
+        let mut transaction = self.get_transaction_by_id(transaction_id.clone());
+
+        // transfer Nears
+        if env::attached_deposit() >= transaction.price {
+
+            //env::log_str(format!("Nears sent to: {}", env::current_account_id).as_bytes());
+
+
+            Promise::new(env::current_account_id()).transfer(env::attached_deposit());
+            //Promise::new(env::current_account_id()).transfer(transaction.price);
+
+            env::log(format!("sent to: {}", env::current_account_id()).as_bytes());
+        
+    } else {
+            panic!("Not enough Nears");
+        }
+
+        // update transaction status
+        transaction.transaction_status = TransactionStatus::Pending;
+
+        env::log(format!("After Transfer: {}", env::account_balance()/YOCTO_NEAR).as_bytes());
+    }
 
     pub fn pay(receiver_id: AccountId) -> Promise {  //should be private, and only be called under some conditions, do i need &self? as argument
-        let amount = env::account_balance() - 20*ONE_NEAR;  // should be replace by the amount transfered
+        let amount = env::account_balance() - 20*YOCTO_NEAR;  // should be replace by the amount transfered
         Promise::new(receiver_id).transfer(amount)
     }
+
+    // to check if the user has nfts in the contract given
+    pub fn check_nft(account_id: AccountId) {
+
+    ext_contract_::nft_supply_for_owner(
+        env::signer_account_id(), //account_id.clone(),
+        &"example-nft.testnet", // contract account id 
+        NO_DEPOSIT, // yocto NEAR to attach
+        BASE_GAS, // gas to attach
+     );
+     env::log(format!("llegué hasta el final").as_bytes());
+    }
+     
+}
+//function to be called
+#[ext_contract(ext_contract_)]
+trait ExtContract {
+fn nft_supply_for_owner(&self, account_id: AccountId);
 }
 
+//callback function
 

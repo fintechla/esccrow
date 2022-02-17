@@ -1,4 +1,4 @@
-use near_sdk::{env, near_bindgen, AccountId, PanicOnDefault, Promise, Gas, Balance};
+use near_sdk::{env, near_bindgen, AccountId, PanicOnDefault, Promise, PromiseResult,  Gas, Balance};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::collections::{LookupMap, UnorderedMap, UnorderedSet};
@@ -11,9 +11,9 @@ use near_sdk::ext_contract;
 
 
 const NO_DEPOSIT: Balance = 0;
-const BASE_GAS: Gas = 300_000_000_000_000;
+const BASE_GAS: Gas =  3_000_000_000_000;
 
-const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
+const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000; // 1 followed by 14 zeros
 
 /*******************************/
 /*********** STRUCTS ***********/
@@ -190,7 +190,7 @@ impl Contract {
             creator_id: sender.clone(),
             seller_id: seller_id.clone(),
             buyer_id: buyer_id.clone(), 
-            price: price,
+            price: price*YOCTO_NEAR,
             nft_id: nft_id.clone(),
             nft_contract_id: nft_contract_id.clone(),
             amount_in_escrow: false,
@@ -220,31 +220,44 @@ impl Contract {
     // TODO: CHECK STATUS UPDATE
     #[payable]
     pub fn transfer_to_lock(&mut self, transaction_id: TransactionId) {  //should be private, and only be called under some conditions
-
-        env::log(format!("Before Transfer: {}", env::account_balance()/YOCTO_NEAR).as_bytes());
         
         let mut transaction = self.get_transaction_by_id(transaction_id.clone());
+        
+        env::log(format!("attached deposit: {}", env::attached_deposit()).as_bytes());
+        env::log(format!("transaction price: {}", transaction.price).as_bytes());
+
+        
+        assert!(env::attached_deposit() >= transaction.price, "Not enough Nears Attached to cover price");
+
+        //env::log(format!("thanks").as_bytes()); // signer account
+        env::log(b"thanks");
 
         // transfer Nears
-        if env::attached_deposit() >= transaction.price {
+        //if env::attached_deposit() >= transaction.price {
 
-            //env::log_str(format!("Nears sent to: {}", env::current_account_id).as_bytes());
-
-
-            Promise::new(env::current_account_id()).transfer(env::attached_deposit());
-            //Promise::new(env::current_account_id()).transfer(transaction.price);
-
-            env::log(format!("sent to: {}", env::current_account_id()).as_bytes());
+        //    env::log_str("Thanks!");
         
-    } else {
-            panic!("Not enough Nears");
-        }
-
+        //} else {
+        //    panic!("Not enough Nears");
+        //    }
         // update transaction status
-        transaction.transaction_status = TransactionStatus::Pending;
-
-        env::log(format!("After Transfer: {}", env::account_balance()/YOCTO_NEAR).as_bytes());
+        //transaction.transaction_status = TransactionStatus::Pending;
     }
+
+
+    pub fn test(&self) {
+        env::log(format!("signer_account_id: {}", env::signer_account_id()).as_bytes()); // signer account
+        env::log(format!("predecessor_account_id: {}", env::predecessor_account_id()).as_bytes()); // signer account when no callback
+        env::log(format!("current_account_id: {}", env::current_account_id()).as_bytes()); //contract account
+        env::log(format!("attached_deposit: {}", env::attached_deposit()).as_bytes());
+        env::log(format!("account_balance: {}", env::account_balance()).as_bytes()); //balance of contract account
+    }
+
+
+
+
+
+
 
     pub fn pay(receiver_id: AccountId) -> Promise {  //should be private, and only be called under some conditions, do i need &self? as argument
         let amount = env::account_balance() - 20*YOCTO_NEAR;  // should be replace by the amount transfered
@@ -254,13 +267,43 @@ impl Contract {
     // to check if the user has nfts in the contract given
     pub fn check_nft(account_id: AccountId) {
 
-    ext_contract_::nft_supply_for_owner(
-        env::signer_account_id(), //account_id.clone(),
+    let nft_number = ext_contract_::nft_supply_for_owner(
+        account_id.clone(),
         &"example-nft.testnet", // contract account id 
         NO_DEPOSIT, // yocto NEAR to attach
         BASE_GAS, // gas to attach
      );
      env::log(format!("llegué hasta el final").as_bytes());
+
+     nft_number.then(ext_self::my_callback(
+        &env::current_account_id(), // this contract's account id
+        0, // yocto NEAR to attach to the callback
+        5_000_000_000_000 // gas to attach to the callback
+    ));
+    }
+
+    //callback function
+    pub fn my_callback(&self) -> String {
+        assert_eq!(
+            env::promise_results_count(),
+            1,
+            "This is a callback method"
+        );
+
+        // handle the result from the cross contract call this method is a callback for
+        match env::promise_result(0) {
+            PromiseResult::NotReady => unreachable!(),
+            PromiseResult::Failed => "oops!".to_string(),
+            PromiseResult::Successful(result) => {
+                let balance = near_sdk::serde_json::from_slice::<U128>(&result).unwrap();
+                env::log(format!("llegué hasta el final {:#?}", balance.0).as_bytes()); // remove later
+                if balance.0 > 0 {
+                    "yes".to_string()
+                } else {
+                    "no".to_string()
+                }
+            },
+        }
     }
      
 }
@@ -270,5 +313,8 @@ trait ExtContract {
 fn nft_supply_for_owner(&self, account_id: AccountId);
 }
 
-//callback function
-
+// define methods we'll use as callbacks on our contract
+#[ext_contract(ext_self)]
+pub trait MyContract {
+    fn my_callback(&self) -> String;
+}

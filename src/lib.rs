@@ -4,6 +4,8 @@ use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::collections::{LookupMap, UnorderedMap, UnorderedSet};
 use near_sdk::BorshStorageKey;
 use near_sdk::json_types::U128;
+
+//use near_sdk::env::{account_balance, is_valid_account_id};
 //use near_sdk::env::{account_balance};
 //use near_sdk::env::{account_balance, current_account_id};
 
@@ -13,7 +15,7 @@ use near_sdk::ext_contract;
 const NO_DEPOSIT: Balance = 0;
 const BASE_GAS: Gas =  3_000_000_000_000;
 
-const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000; // 1 followed by 14 zeros
+const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000; // 1 followed by 24 zeros
 
 /*******************************/
 /*********** STRUCTS ***********/
@@ -22,11 +24,12 @@ pub type TransactionId = u128; //*********
 pub type Price = u128;
 pub type TokenId = String;
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PartialEq)]
 #[serde(crate = "near_sdk::serde")]
 pub enum TransactionStatus {
     Pending,
-    Confirmed,
+    TokensLocked,
+    TokensAndNFTLocked,
     Completed,
     Cancelled,
 }
@@ -102,8 +105,11 @@ pub struct Contract {
     //total of transactions
     pub total_transactions: u128, // should it be a bigger number?
 
-    //contract owner
+    //contract owner, some functions could only be use by the owner
     pub owner_id: AccountId,
+
+    //transaction fee, 2% of the price, but could be changed by the owner
+    pub transaction_fee: u128,
 
     //keeps track of all the transactions IDs for a given account
     pub transactions_per_account: LookupMap<AccountId, UnorderedSet<TransactionId>>,
@@ -132,6 +138,7 @@ impl Contract {
             total_transactions: 0, //total number of transactions, used for id generation
             //set the owner_id field equal to the passed in owner_id. 
             owner_id,
+            transaction_fee: 2, //2% of the price
             //Storage keys are simply the prefixes used for the collections. This helps avoid data collision
             transactions_per_account: LookupMap::new(StorageKeys::TransactionsPerAccount),
             transaction_by_id: LookupMap::new(StorageKeys::TransactionById),
@@ -173,6 +180,9 @@ impl Contract {
         }
     }
 
+
+   //TODO: CHECK ACCOUNT ID ARE VALID
+   //TODO: ADD STORAGE MANAGEMENT, IT MAY BE NECESSARY TO MERGE CREATION AND TRANSFERENCE OF TOKENS
     #[payable]
     pub fn create_transaction(       //implement storage management for transactions
         &mut self,
@@ -202,7 +212,7 @@ impl Contract {
         //let account_as_key = transaction.creator_id.try_to_vec().unwrap();
 
         // update number of transactions
-        //self.total_transactions += 1;
+        self.total_transactions += 1;
 
         self.add_transaction_to_user(&transaction.creator_id, &transaction.transaction_id);
         
@@ -217,17 +227,90 @@ impl Contract {
         })
     }
 
-    // TODO: CHECK STATUS UPDATE
+    //Check if account_id is valid, note: eliminate this function
+    pub fn verify_account_id(&self, account_id: AccountId) -> bool {
+        let result = env::is_valid_account_id(account_id.as_ref());
+        result
+    }
+
+    //Get transaction fee
+    pub fn get_transaction_fee(&self, transaction_id: TransactionId) -> u128 {
+        let transaction = self.get_transaction_by_id(transaction_id);
+        let price = transaction.price;
+        let fee = (price/100)*self.transaction_fee;
+        fee
+    }
+
+    //It return the transaction fee in yocto near
+    pub fn get_price_plus_fee(&self, transaction_id: TransactionId) -> u128 {
+        let transaction = self.get_transaction_by_id(transaction_id);
+        let price = transaction.price;
+        let fee = self.get_transaction_fee(transaction_id);
+        let price_plus_fee = price + fee;
+        price_plus_fee
+    }
+
+    //Set new transaction fee parameter
+    pub fn set_transaction_fee(&mut self, new_transaction_fee: u128) -> u128 {
+
+        //only the owner can change the transaction fee
+        if env::predecessor_account_id() == self.owner_id {
+            self.transaction_fee = new_transaction_fee;
+        } else {
+            panic!("Only the owner can change the transaction fee");
+        }
+
+        self.transaction_fee
+    }
+
+    //Get transaction fee parameter
+    pub fn get_transaction_fee_parameter(&self) -> u128 {
+        self.transaction_fee
+    }
+
+    // DONE: CHECK STATUS UPDATE [TO PENDING FOR EXAMPLE]
+    // DONE: CHECK TRANSACTION ID EXIST   [I could only verify it has a valid form]
+    // DONE: CHECK ONLY OWNER/SELLER CAN MAKE THE DEPOSIT
+    // DONE: CHECK DEPOSIT CAN ONLY BE MADE ONCE PER TRANSACTION
+    // DONE: RETURN TRANSACTION OBJECT SO UPDATED STATUS CAN BE CHECKED
+    // DONE: INCLUDE TRANSACTION FEES
+    // DONE: FUNCTION TO CHANGE TRANSACTION FEE, AND ONLY OWNER CAN DO THIS
+    // TODO: FUNCTION TO SEND FEES TO TREASURE CONTRACT
+    // TODO: FUNCION TO FREE UP TOKENS AFTER TRANSACTION
+    // TODO: HOW TO STORE SELLER INFO?
+    // TODO: WRITE TEST
+    // TODO: NFT TRANSFER FUNCTIONS
+    // TODO: AFTER HAVING WRITEN TEST, REFACTOR CODE TO BE MORE LIGHTWEIGHT AND EFICIENT, EASIER TO READ AND SECURE
     #[payable]
-    pub fn transfer_to_lock(&mut self, transaction_id: TransactionId) {  //should be private, and only be called under some conditions
+    pub fn transfer_to_lock(&mut self, transaction_id: TransactionId) -> Transaction {  //should be private, and only be called under some conditions
         
+        let sender = env::predecessor_account_id();
+
         let mut transaction = self.get_transaction_by_id(transaction_id.clone());
         
-        env::log(format!("attached deposit: {}", env::attached_deposit()).as_bytes());
-        env::log(format!("transaction price: {}", transaction.price).as_bytes());
+        //Verify deposit is equal to price + fee
+        let total_price = self.get_price_plus_fee(transaction_id);
 
+        env::log(format!("Total price plus fee: {}", total_price).as_bytes());
+        env::log(format!("Attached deposit: {}", env::attached_deposit()).as_bytes());
+
+        assert!(env::attached_deposit() == total_price, "Not enough Nears attached to cover price and fee"); // here im convertin a float to u128. Check if it will not bring a problem of rounding or something similar
+
+        env::log(format!("sender: {}", env::predecessor_account_id()).as_bytes());
+        env::log(format!("seller: {}", transaction.seller_id).as_bytes());
+        //Sender must be the creator of the transaction
+        assert!(sender == transaction.seller_id, "You are not the seller of this transaction");
+
+        //Check if transaction is pending
+        assert!(transaction.transaction_status == TransactionStatus::Pending, "Transference has already been made");
         
-        assert!(env::attached_deposit() >= transaction.price, "Not enough Nears Attached to cover price");
+
+
+
+
+
+
+
 
         //env::log(format!("thanks").as_bytes()); // signer account
         env::log(b"thanks");
@@ -240,8 +323,17 @@ impl Contract {
         //} else {
         //    panic!("Not enough Nears");
         //    }
-        // update transaction status
-        //transaction.transaction_status = TransactionStatus::Pending;
+
+
+        //Update transaction status
+        transaction.transaction_status = TransactionStatus::TokensLocked;
+
+        //Update transaction in storage
+        self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
+
+        //Return transaction
+        let transaction_updated = self.get_transaction_by_id(transaction_id.clone());
+        transaction_updated
     }
 
 
@@ -263,6 +355,8 @@ impl Contract {
         let amount = env::account_balance() - 20*YOCTO_NEAR;  // should be replace by the amount transfered
         Promise::new(receiver_id).transfer(amount)
     }
+
+
 
     // to check if the user has nfts in the contract given
     pub fn check_nft(account_id: AccountId) {
@@ -307,6 +401,11 @@ impl Contract {
     }
      
 }
+
+
+
+
+
 //function to be called
 #[ext_contract(ext_contract_)]
 trait ExtContract {

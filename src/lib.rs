@@ -15,7 +15,10 @@ use near_sdk::ext_contract;
 const NO_DEPOSIT: Balance = 0;
 const BASE_GAS: Gas =  3_000_000_000_000;
 
+const TRANSFER_NFT_GAS: Gas = 9_000_000_000_000; // tranefer NFT cost aprox 1.4 Tgas?
+
 const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000; // 1 followed by 24 zeros
+const ONE_YOCTO: u128 = 1; //******
 
 /*******************************/
 /*********** STRUCTS ***********/
@@ -277,10 +280,12 @@ impl Contract {
     // DONE: FUNCTION TO CHANGE TRANSACTION FEE, AND ONLY OWNER CAN DO THIS
     // TODO: FUNCTION TO SEND FEES TO TREASURE CONTRACT
     // TODO: FUNCION TO FREE UP TOKENS AFTER TRANSACTION
+    // TODO: STORAGE MANAGEMENT
     // TODO: HOW TO STORE SELLER INFO?
     // TODO: WRITE TEST
     // TODO: NFT TRANSFER FUNCTIONS
     // TODO: AFTER HAVING WRITEN TEST, REFACTOR CODE TO BE MORE LIGHTWEIGHT AND EFICIENT, EASIER TO READ AND SECURE
+    // TODO: FUNCTION TO ERASE CANCELED TRANSACTIONSs
     #[payable]
     pub fn transfer_to_lock(&mut self, transaction_id: TransactionId) -> Transaction {  //should be private, and only be called under some conditions
         
@@ -346,11 +351,13 @@ impl Contract {
     }
 
 
-
-
-
-
-
+    // TODO: PAY THE SELLER
+    // TODO: PAY AMOUNT REQUIRED MINUS TRANSACTION FEE
+    // TODO: PAY ONLY IF NFT WAS TRANSFERRED
+    // TODO: PAY ONLY IF CONTRACT HAS ENOUGH FUNDS
+    // TODO: PAY ONLY IF TRANSACTION WAS SUCCESSFUL
+    // TODO: PAY CAN BE CALLED ONLY ONCE PER TRANSACTION
+    //
     pub fn pay(receiver_id: AccountId) -> Promise {  //should be private, and only be called under some conditions, do i need &self? as argument
         let amount = env::account_balance() - 20*YOCTO_NEAR;  // should be replace by the amount transfered
         Promise::new(receiver_id).transfer(amount)
@@ -377,7 +384,7 @@ impl Contract {
     }
 
     //callback function
-    pub fn my_callback(&self) -> String {
+    pub fn my_callback(&self) -> String {   //change name of this callback function
         assert_eq!(
             env::promise_results_count(),
             1,
@@ -399,6 +406,80 @@ impl Contract {
             },
         }
     }
+
+    // Ask for aproval to transfer NFTs
+    pub fn ask_for_approval(&self, token_id: TokenId, account_id: AccountId) {
+        let promise = ext_contract_::nft_approve(
+            token_id.clone(),
+            account_id.clone(),
+            None,
+            &"example-nft.testnet", // contract account id 
+            YOCTO_NEAR, // IT IS A PAYABLE FUNCTION, CHANGE IT TO LESS NEARS
+            BASE_GAS, // gas to attach
+        );
+        promise.then(ext_self::on_ask_for_approval(
+            &env::current_account_id(), // this contract's account id
+            0, // yocto NEAR to attach to the callback
+            5_000_000_000_000 // gas to attach to the callback
+        ));
+    }
+
+    //callback function
+    pub fn on_ask_for_approval(&self) -> String {   //change name of this callback function
+        assert_eq!(
+            env::promise_results_count(),
+            1,
+            "This is a callback method"
+        );
+
+        // handle the result from the cross contract call this method is a callback for
+        match env::promise_result(0) {
+            PromiseResult::NotReady => unreachable!(),
+            PromiseResult::Failed => "oops!".to_string(),
+            PromiseResult::Successful(_result) => {
+                "Success!".to_string()
+            },
+        }
+    }
+
+    //callback function
+    pub fn on_transfer_locked_nft(&self) -> String {   //change name of this callback function
+        assert_eq!(
+            env::promise_results_count(),
+            1,
+            "This is a callback method"
+        );
+
+        // handle the result from the cross contract call this method is a callback for
+        match env::promise_result(0) {
+            PromiseResult::NotReady => unreachable!(),
+            PromiseResult::Failed => "oops!".to_string(),
+            PromiseResult::Successful(_result) => {
+                "Success!".to_string()
+            },
+        }
+    }
+
+    // Transfer NFT
+    // TODO: MODIFY THIS FUNCTION TO USE NFT_TRANSFER
+    // TODO: WRITE ON_NFT_TRANSFER
+    // TODO: ADD TRAITS FOR NFT_TRANSFER AND ON_NFT_TRANSFER
+    pub fn transfer_locked_nft(&self, receiver_id: AccountId, token_id: TokenId) {
+        let promise = ext_contract_::nft_transfer(
+            receiver_id.clone(),
+            token_id.clone(),
+            0, //what should i use here? TRY WITH SOME
+            None,
+            &"example-nft.testnet", // contract account id 
+            ONE_YOCTO, // 
+            TRANSFER_NFT_GAS, // gas to attach
+        );
+        promise.then(ext_self::on_transfer_locked_nft(
+            &env::current_account_id(), // this contract's account id
+            0, // yocto NEAR to attach to the callback
+            5_000_000_000_000 // gas to attach to the callback
+        ));
+    }
      
 }
 
@@ -410,10 +491,20 @@ impl Contract {
 #[ext_contract(ext_contract_)]
 trait ExtContract {
 fn nft_supply_for_owner(&self, account_id: AccountId);
+fn nft_approve(&mut self, token_id: TokenId, account_id: AccountId, msg: Option<String>);
+fn nft_transfer(
+    &mut self,
+    receiver_id: AccountId,
+    token_id: TokenId,
+    approval_id: u64,
+    memo: Option<String>,
+);
 }
 
 // define methods we'll use as callbacks on our contract
 #[ext_contract(ext_self)]
 pub trait MyContract {
     fn my_callback(&self) -> String;
+    fn on_ask_for_approval(&self) -> String;
+    fn on_transfer_locked_nft(&self) -> String;
 }

@@ -15,7 +15,7 @@ use near_sdk::ext_contract;
 const NO_DEPOSIT: Balance = 0;
 const BASE_GAS: Gas =  3_000_000_000_000;
 
-const TRANSFER_NFT_GAS: Gas = 9_000_000_000_000; // tranefer NFT cost aprox 1.4 Tgas?
+const TRANSFER_NFT_GAS: Gas = 10_000_000_000_000; // tranefer NFT cost aprox 1.4 Tgas?
 
 const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000; // 1 followed by 24 zeros
 const ONE_YOCTO: u128 = 1; //******
@@ -106,7 +106,7 @@ pub struct TransactionMetadata {
 pub struct Contract {
 
     //total of transactions
-    pub total_transactions: u128, // should it be a bigger number?
+    pub total_transactions: u128, // should it be a bigger number? It is used as unique TransactionId
 
     //contract owner, some functions could only be use by the owner
     pub owner_id: AccountId,
@@ -309,14 +309,6 @@ impl Contract {
         //Check if transaction is pending
         assert!(transaction.transaction_status == TransactionStatus::Pending, "Transference has already been made");
         
-
-
-
-
-
-
-
-
         //env::log(format!("thanks").as_bytes()); // signer account
         env::log(b"thanks");
 
@@ -328,7 +320,6 @@ impl Contract {
         //} else {
         //    panic!("Not enough Nears");
         //    }
-
 
         //Update transaction status
         transaction.transaction_status = TransactionStatus::TokensLocked;
@@ -460,17 +451,24 @@ impl Contract {
         }
     }
 
+
     // Transfer NFT
-    // TODO: MODIFY THIS FUNCTION TO USE NFT_TRANSFER
-    // TODO: WRITE ON_NFT_TRANSFER
-    // TODO: ADD TRAITS FOR NFT_TRANSFER AND ON_NFT_TRANSFER
-    pub fn transfer_locked_nft(&self, receiver_id: AccountId, token_id: TokenId) {
+    // DONE: MODIFY THIS FUNCTION TO USE NFT_TRANSFER
+    // DONE: WRITE ON_NFT_TRANSFER
+    // DONE: ADD TRAITS FOR NFT_TRANSFER AND ON_NFT_TRANSFER
+    // TODO: MAKE IT USE THE INFO OF THE TRANSACTION
+    // TODO: TRY TO GENERALIZE IT
+    pub fn transfer_nft_from_scrow(&self, 
+        receiver_id: AccountId, 
+        nft_contract_id: AccountId, 
+        token_id: TokenId) {
+
         let promise = ext_contract_::nft_transfer(
             receiver_id.clone(),
             token_id.clone(),
-            0, //what should i use here? TRY WITH SOME
+            0, // non used argument
             None,
-            &"example-nft.testnet", // contract account id 
+            &nft_contract_id, // contract account id 
             ONE_YOCTO, // 
             TRANSFER_NFT_GAS, // gas to attach
         );
@@ -480,6 +478,39 @@ impl Contract {
             5_000_000_000_000 // gas to attach to the callback
         ));
     }
+
+    //Transfer function
+    //It will trasnfer the nft to the buyer is the transaction was successful
+    //It will transfer back the nft to the seller if the transaction was not successful
+    //TODO: Look for a better status than completed
+    //TODO: MAKE THE FUNCTION UPDATE TRANSACTION STATUS
+    pub fn transfer_nft(&mut self, transaction_id: TransactionId) {
+
+        let mut transaction = self.get_transaction_by_id(transaction_id.clone());
+
+        let status = transaction.transaction_status;
+        let nft_contract_id = transaction.nft_contract_id;
+        let token_id = transaction.nft_id;
+        
+        match status {
+            TransactionStatus::TokensAndNFTLocked => {
+                let receiver_id = transaction.buyer_id.clone();  // check if someone can mess up with the contract by swapping the buyer and seller id
+                self.transfer_nft_from_scrow(receiver_id, nft_contract_id, token_id);
+            },
+            TransactionStatus::Cancelled => {
+                let receiver_id = transaction.seller_id.clone();
+                self.transfer_nft_from_scrow(receiver_id, nft_contract_id, token_id);
+            },
+            _ => {
+                env::log(format!("Tokens and NFT must be on scrow custody before calling this function").as_bytes());
+                return;
+            }
+
+        } 
+
+    }
+
+
      
 }
 
@@ -508,3 +539,6 @@ pub trait MyContract {
     fn on_ask_for_approval(&self) -> String;
     fn on_transfer_locked_nft(&self) -> String;
 }
+
+
+// ESTE ES UN COMENTARIO DE PRUEBA

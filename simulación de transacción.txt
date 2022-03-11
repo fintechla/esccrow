@@ -1,0 +1,31 @@
+Buyer:
+usuario01.testaccount14.testnet
+
+Seller:
+usuario02.testaccount14.testnet   
+
+
+https://wallet.testnet.near.org/auto-import-secret-key#usuario01.testaccount14.testnet/ed25519:YdPoxBtuGkE4LfB6Lt1vYJU6mDb6THsaEJWEvv2tLXz7LXxhskYiujExCJwodJq5k6SVXWfvft7r7LJHQs7oYfa
+
+
+near view paras-token-v2.testnet nft_tokens_for_owner '{"account_id":"usuario02.testaccount14.testnet"}' --account-id usuario02.testaccount14.testnet
+
+title: 'Eyes NFT #17'
+token_id: '210:17'
+
+near call esccrow.testaccount14.testnet create_transaction '{"seller_id": "usuario02.testaccount14.testnet", "buyer_id": "usuario01.testaccount14.testnet", "price": 5, "nft_id": "210:17", "nft_contract_id": "paras-token-v2.testnet"}' --account-id usuario01.testaccount14.testnet
+
+near call esccrow.testaccount14.testnet transfer_to_lock '{"transaction_id":0}' --account-id usuario01.testaccount14.testnet --amount 5.1
+
+near call paras-token-v2.testnet nft_supply_for_owner '{"account_id":"esccrow.testaccount14.testnet"}' --account-id esccrow.testaccount14.testnet
+
+near call esccrow.testaccount14.testnet check_nft '{"transaction_id":2}' --account-id usuario01.testaccount14.testnet
+
+near call esccrow.testaccount14.testnet transfer_nft '{"transaction_id":3}' --account-id usuario01.testaccount14.testnet
+
+near call esccrow.testaccount14.testnet pay_transaction '{"transaction_id":3}' --account-id usuario01.testaccount14.testnet
+
+near view paras-token-v2.testnet nft_tokens_for_owner '{"account_id":"usuario01.testaccount14.testnet"}' --account-id usuario01.testaccount14.testnet
+
+
+

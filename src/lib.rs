@@ -6,6 +6,11 @@ use near_sdk::BorshStorageKey;
 use near_sdk::json_types::U128;
 use near_sdk::ext_contract;
 
+
+use near_sdk::serde_json;
+use std::collections::HashMap;
+
+
 const NO_DEPOSIT: Balance = 0;
 const BASE_GAS: Gas =  3_000_000_000_000;
 
@@ -13,7 +18,7 @@ const TRANSFER_NFT_GAS: Gas = 10_000_000_000_000; // transfer NFT cost aprox 1.4
 
 const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000; // 1 followed by 24 zeros
 const ONE_YOCTO: u128 = 1; //******
-const STORAGE_PRICE_PER_BYTE: Balance = 10_000_000_000_000_000_000;  // source of this number??
+const STORAGE_PRICE_PER_BYTE: Balance = 10_000_000_000_000_000_000;  // source of this number: https://docs.near.org/docs/concepts/storage-staking
 
 /*******************************/
 /*********** STRUCTS ***********/
@@ -111,6 +116,9 @@ pub struct Contract {
     //transaction fee, 2% of the price, but could be changed by the owner
     pub transaction_fee: u128,
 
+    //transaction fee amount acumulated
+    pub transaction_fees: u128,
+
     //keeps track of all the transactions IDs for a given account
     pub transactions_per_account: LookupMap<AccountId, UnorderedSet<TransactionId>>,
 
@@ -138,6 +146,7 @@ impl Contract {
             total_transactions: 0, //total number of transactions, used for id generation
             owner_id, //set the owner_id field equal to the passed in owner_id
             transaction_fee: 2, //2% of the price
+            transaction_fees: 0,
             //Storage keys are simply the prefixes used for the collections. This helps avoid data collision
             transactions_per_account: LookupMap::new(StorageKeys::TransactionsPerAccount),
             transaction_by_id: LookupMap::new(StorageKeys::TransactionById),
@@ -202,7 +211,11 @@ impl Contract {
         // update number of transactions
         self.total_transactions += 1;
 
+        // add transaction to buyer
         self.add_transaction_to_user(&transaction.creator_id, &transaction.transaction_id);
+
+        // add transaction to seller
+        self.add_transaction_to_user(&transaction.seller_id, &transaction.transaction_id); // I think this solves seller info issue
         
         self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
 
@@ -260,6 +273,11 @@ impl Contract {
     //Get transaction fee parameter
     pub fn get_transaction_fee_parameter(&self) -> u128 {
         self.transaction_fee
+    }
+
+    //Get transaction fee parameter
+    pub fn get_transaction_fees(&self) -> u128 {
+        self.transaction_fees
     }
 
     // DONE: CHECK STATUS UPDATE [TO PENDING FOR EXAMPLE]
@@ -324,6 +342,30 @@ impl Contract {
     }
 
 
+    // CANCEL TRANSACTION
+    // IF THIS IS RIGHT, EVERY OTHER FUNCTION SHOULD BEHAVE ACCORDINGLY TO THIS STATUS CHANGE
+    pub fn cancel_transaction(&mut self, transaction_id: TransactionId) -> Transaction {
+        let mut transaction = self.get_transaction_by_id(transaction_id.clone());
+        let sender = env::predecessor_account_id();
+
+        //Verify transaction is pending
+        //assert!(transaction.transaction_status == TransactionStatus::Pending, "Transaction is not pending");
+
+        //Verify sender is the seller
+        assert!(sender == transaction.seller_id, "You are not the seller of this transaction");
+
+        //Update transaction status
+        transaction.transaction_status = TransactionStatus::Cancelled;
+
+        //Update transaction in storage
+        self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
+
+        //Return transaction
+        let transaction_updated = self.get_transaction_by_id(transaction_id.clone());
+        transaction_updated
+    }
+
+
     // TODO: PAY THE SELLER
     // TODO: PAY AMOUNT REQUIRED MINUS TRANSACTION FEE
     // TODO: PAY ONLY IF NFT WAS TRANSFERRED
@@ -378,6 +420,14 @@ impl Contract {
         Promise::new(receiver_id).transfer(amount)
     }
 
+
+    //Only owner should be able to call this function
+    //Evaluate to send nears to another account (treasury account)
+    pub fn transfer_transaction_fees(&mut self) {
+        self.pay(self.owner_id.clone(), self.transaction_fees);
+        self.transaction_fees = 0;
+    }
+
     // to check if the user has nfts in the contract given
     pub fn _check_nft(account_id: AccountId) {
 
@@ -394,6 +444,64 @@ impl Contract {
         0, // yocto NEAR to attach to the callback
         5_000_000_000_000 // gas to attach to the callback
     ));
+    }
+
+    // Function that tells you if the nft belongs to the user
+    pub fn is_nft_owner(token_id: TokenId, nft_contract_id: AccountId, transaction_id: TransactionId) {
+
+        let nft_number = ext_contract_::nft_token(
+            token_id.clone(),
+            &nft_contract_id, // contract account id 
+            NO_DEPOSIT, // yocto NEAR to attach
+            5_000_000_000_000, // gas to attach
+         );
+
+         env::log(format!("Contract call to nft_token completed").as_bytes());
+
+         nft_number.then(ext_self::on_is_nft_owner(
+            transaction_id.clone(),
+            &env::current_account_id(), // this contract's account id
+            NO_DEPOSIT, // yocto NEAR to attach to the callback
+            5_000_000_000_000 // gas to attach to the callback
+        ));
+        }
+    
+    //callback function
+    pub fn on_is_nft_owner(&mut self, transaction_id: TransactionId) -> bool {   //change name of this callback function
+        assert_eq!(
+            env::promise_results_count(),
+            1,
+            "This is a callback method"
+        );
+        match env::promise_result(0) {
+            PromiseResult::NotReady => unreachable!(),
+            PromiseResult::Failed => {
+                panic!("Promise failed");
+            },
+            PromiseResult::Successful(j) => {
+                let result: HashMap<String, serde_json::Value> = near_sdk::serde_json::from_slice(&j).unwrap();
+                match result.get("owner_id") {
+                    Some(owner_account) => {
+                        if owner_account == &env::current_account_id() {  //change to the account id of the contract
+                            
+                            //change transaction status to NFT locked
+                            let mut transaction = self.get_transaction_by_id(transaction_id.clone());
+                            transaction.transaction_status = TransactionStatus::TokensAndNFTLocked;
+                            //Update transaction in storage
+                            self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
+                            //return transaction status
+                            //let transaction_updated = self.get_transaction_by_id(transaction_id.clone());
+                            return true
+                        } else {
+                            return false
+                        };
+                    },
+                    None => {
+                        panic!("No owner_id found in the result");
+                    }
+                }
+            },
+        }
     }
 
     //callback function
@@ -475,16 +583,16 @@ impl Contract {
 
     //TODO: Check if NFT is owned by the contract
     //TODO: Only can be called after the tokens has been locked
-    pub fn check_nft(& mut self, transaction_id: TransactionId) -> Transaction {
-        //change transaction status to NFT locked
-        let mut transaction = self.get_transaction_by_id(transaction_id.clone());
-        transaction.transaction_status = TransactionStatus::TokensAndNFTLocked;
-        //Update transaction in storage
-        self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
+    //pub fn check_nft(& mut self, transaction_id: TransactionId) -> Transaction {
+    //    //change transaction status to NFT locked
+    //    let mut transaction = self.get_transaction_by_id(transaction_id.clone());
+    //    transaction.transaction_status = TransactionStatus::TokensAndNFTLocked;
+    //    //Update transaction in storage
+    //    self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
         //return transaction status
-        let transaction_updated = self.get_transaction_by_id(transaction_id.clone());
-        transaction_updated
-    }
+    //    let transaction_updated = self.get_transaction_by_id(transaction_id.clone());
+    //    transaction_updated
+    //}
 
 
     // Transfer NFT
@@ -536,6 +644,10 @@ impl Contract {
                 //Update transaction in storage
                 self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
 
+                //Update transaction fees
+                let transaction_fee = self.get_transaction_fee(transaction_id.clone());
+                self.transaction_fees += transaction_fee;
+
                 //Return transaction
                 let transaction_updated = self.get_transaction_by_id(transaction_id.clone());
                 transaction_updated
@@ -567,7 +679,7 @@ pub fn deposit_refund(storage_used: u64) {
 
     assert!(
         required_cost <= attached_deposit,
-        "Requires to attach {:.1$} NEAR services to cover storage",required_cost as f64 / YOCTO_NEAR as f64, 3 // la presicion de decimales
+        "Requires to attach {:.1$} NEAR services to cover storage", required_cost as f64 / YOCTO_NEAR as f64, 3 // la presicion de decimales
     );
 
     let refund = attached_deposit - required_cost;
@@ -588,6 +700,7 @@ fn nft_transfer(
     approval_id: u64,
     memo: Option<String>,
 );
+fn nft_token(&self, token_id: TokenId);
 }
 
 // define methods we'll use as callbacks on our contract
@@ -596,4 +709,5 @@ pub trait MyContract {
     fn my_callback(&self) -> String;
     fn on_ask_for_approval(&self) -> String;
     fn on_transfer_locked_nft(&self) -> String;
+    fn on_is_nft_owner(&self, transaction_id: TransactionId) -> bool;
 }

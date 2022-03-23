@@ -5,7 +5,7 @@ Seller:
 usuario02.testaccount14.testnet   
 
 
-https://wallet.testnet.near.org/auto-import-secret-key#usuario01.testaccount14.testnet/ed25519:YdPoxBtuGkE4LfB6Lt1vYJU6mDb6THsaEJWEvv2tLXz7LXxhskYiujExCJwodJq5k6SVXWfvft7r7LJHQs7oYfa
+https://wallet.testnet.near.org/auto-import-secret-key#testaccount15.testnet/ed25519:4UibBb1P41dXFh5eTrXV7mp7cKDx652qhzuHufqzGqoTnBDv7xFF4Doc4MC3givYNxswMWCMbHqH6kdTi33EGy3V
 
 
 near view paras-token-v2.testnet nft_tokens_for_owner '{"account_id":"usuario02.testaccount14.testnet"}' --account-id usuario02.testaccount14.testnet

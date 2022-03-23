@@ -6,4 +6,4 @@ near deploy \
   --wasmFile "$WASM_PATH" \
   --accountId "$1" \
   --initFunction new \
-  --initArgs '{"owner_id": "testaccount14.testnet"}'
+  --initArgs '{"owner_id": "testaccount15.testnet"}'

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-echo "deleting subaccount 04"
-near delete esccrow.testaccount15.testnet testaccount15.testnet || true
-echo "re creating subaccount 04"
-near create-account esccrow.testaccount15.testnet --masterAccount testaccount15.testnet --initialBalance 50
+echo "deleting subaccount"
+near delete nft-v00.escrow-ftl.testnet escrow-ftl.testnet || true
+echo "re creating subaccount"
+near create-account nft-v00.escrow-ftl.testnet --masterAccount escrow-ftl.testnet --initialBalance 50
 echo "building and deploying"
 ./build.sh
-./deploy.sh esccrow.testaccount15.testnet
+./deploy.sh nft-v00.escrow-ftl.testnet

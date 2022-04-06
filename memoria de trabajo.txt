@@ -1,0 +1,68 @@
+problema: un vendedor puede recibir más de un oferta por un mismo nft
+
+y puede confirmar todas las ofertas porque la función de check nft chequea que sccrow sea el dueño actual del nft
+
+solución?
+
+
+Se debe verificar que al iniciarse la transacción el nft es del vendedor. 
+
+y no deberían poder iniciarse dos al mismo tiempo
+
+necesito un caché (que sería el storage más facil de escribir que haya)
+al iniciarse una transacción se grabaría el nft en la lista y se indicaría que está reservado a cualquier que intente hacer una oferta sobre el
+si la transacción se completa o se cancela este nft se borra de la lista
+
+
+********************************
+
+verificar al momento de crear la transacción si el nft es del sccrow.
+  
+- si es del scrow entonces no debe aceptarse la transaccion
+- se es de cualquier otra persona, da igual quien haga la venta porque si puede hacer la transferencia quiere decir que se el dueño.
+
+*****************************
+
+Un nft no debe poder confirmar el bloqueo de dos transacciones
+
+
+*****************************
+
+Modificaciones:
+
+- NO debes poder comprarle directamente a esccrow, la creación de una transacción no debe permitir que el vendedor sea la cuenta donde está desplegado el contrato.
+
+- la función check nft debe tener una lista de nfts que se han usado para confirmar una transacción. ¿quién paga por el tamaño de esta lista? cobrarselo al precio final
+
+- Solo el seller debe poder llamar a is nft locked
+
+
+*************************
+
+crear el storage
+
+hacer que al chequear la transferencia se grabe ahí
+
+hacer que sea de pago para medir cuanto cuesta
+
+
+escribir una función que estime ese precio
+
+comparar con logs
+
+
+**************
+
+probar que si alguien le da a in nft locked y este no está locked este no se queda anotado en confirmed nft storage
+
+
+
+*******
+
+El storage por el cache es 180 de base
+
+y va subiende de a 2 por cada caracter
+
+cobrar
+
+size en bytes = 180 + len()*2

@@ -1,7 +1,7 @@
 use near_sdk::{env, near_bindgen, AccountId, PanicOnDefault, Promise, PromiseResult,  Gas, Balance};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
-use near_sdk::collections::{LookupMap, UnorderedMap, UnorderedSet};
+use near_sdk::collections::{LookupMap, UnorderedSet};
 use near_sdk::BorshStorageKey;
 use near_sdk::json_types::U128;
 use near_sdk::ext_contract;
@@ -137,13 +137,11 @@ pub struct Contract {
     // Transaction fee, 2% of the price, but could be changed by the owner
     pub transaction_fee: u128,
     // Transaction fee amount acumulated
-    //pub transaction_fees: u128,
+    pub transaction_fees: u128,
     // Keeps track of all the transactions IDs for a given account
     pub transactions_per_account: LookupMap<AccountId, UnorderedSet<TransactionId>>,
     // Keeps track of the transaction struct for a given transaction ID
     pub transaction_by_id: LookupMap<TransactionId, Transaction>,
-    // Keeps track of the transaction metadata for a given transaction ID [info that doesnt change during transaction]
-    pub transaction_metadata_by_id: UnorderedMap<TransactionId, TransactionMetadata>,
     // keeps track of NFTs that are confirmed for a transaction, so no one can sell an nft twice
     pub confirmed_nfts: UnorderedSet<Token>,  // should it be a hashmap instead? https://doc.rust-lang.org/stable/std/collections/index.html#use-a-hashmap-when
     // Number of active transactions
@@ -172,15 +170,43 @@ impl Contract {
             owner_id: owner_id.clone(),
             // 1% of the price by default
             transaction_fee: 1,
-            //transaction_fees: 0,
+            transaction_fees: 0,
             // Storage keys are simply the prefixes used for the collections. This helps avoid data collision
             transactions_per_account: LookupMap::new(StorageKeys::TransactionsPerAccount),
             transaction_by_id: LookupMap::new(StorageKeys::TransactionById),
-            transaction_metadata_by_id: UnorderedMap::new(StorageKeys::TransactionMetadataById),
             confirmed_nfts: UnorderedSet::new(StorageKeys::SubAccount { account_hash: env::sha256(owner_id.as_bytes()) }),
             active_transactions: 0,
         }
     }
+
+    //#[private]
+    //#[init(ignore_state)]
+    //pub fn migrate() -> Self {
+    //    #[derive(BorshDeserialize)]
+    //    pub struct OldContract {
+    //        pub total_transactions: u128, 
+    //        pub owner_id: AccountId,
+    //        pub transaction_fee: u128,
+    //        pub transactions_per_account: LookupMap<AccountId, UnorderedSet<TransactionId>>,
+    //        pub transaction_by_id: LookupMap<TransactionId, Transaction>,
+    //        pub confirmed_nfts: UnorderedSet<Token>,  
+    //        pub active_transactions: u128,
+    //    }
+
+    //    let state: OldContract = env::state_read().unwrap();
+
+    //   Self {
+    //        total_transactions: state.total_transactions, 
+    //        owner_id: state.owner_id,
+    //        transaction_fee: state.transaction_fee,
+            // Transaction fee amount acumulated
+    //        transaction_fees: 0,
+    //        transactions_per_account: state.transactions_per_account,
+    //        transaction_by_id: state.transaction_by_id,
+    //        confirmed_nfts: state.confirmed_nfts,  
+    //        active_transactions: state.active_transactions,
+    //    }
+    //}
 
     fn add_transaction_to_user(&mut self, account_id: &AccountId, transaction_id: &TransactionId) { //make it private
         let mut transaction_set = self.transactions_per_account.get(account_id).unwrap_or_else(|| {
@@ -521,14 +547,24 @@ impl Contract {
     }
 
     // Get transaction fee parameter
-    pub fn get_transaction_fees(&self) -> u128 {
+    //pub fn get_transaction_fees(&self) -> u128 {
         // return acumulated transaction fees
-        env::account_balance() - self.storage_staking_amount()
+    //    env::account_balance() - self.storage_staking_amount()
+    //}
+
+    // Get transactino fees
+    pub fn get_transaction_fees(&self) -> u128 {
+        self.transaction_fees
     }
 
     // Get active transactions
     pub fn get_active_transactions(&self) -> u128 {
         self.active_transactions
+    }
+
+    // Get onwer id
+    pub fn get_owner_id(&self) -> AccountId {
+        self.owner_id.clone()
     }
 
     // CANCEL TRANSACTION
@@ -570,7 +606,9 @@ impl Contract {
             TransactionStatus::TokensAndNFTLocked => {
                 //let receiver_id = transaction.seller_id.clone();  // check if someone can mess up with the contract by swapping the buyer and seller id
                 
-                //let transaction_fee = self.get_transaction_fee(transaction_id);
+                let transaction_fee = self.get_transaction_fee(transaction_id);
+                // update transaction_fees
+                self.transaction_fees += transaction_fee;
 
                 transaction.transaction_status = TransactionStatus::Payed;
 
@@ -588,6 +626,9 @@ impl Contract {
                 //    0, // yocto NEAR to attach to the callback
                 //    5_000_000_000_000 // gas to attach to the callback
                 //));
+                
+                // reduce number of active transactions
+                self.active_transactions -= 1;
 
                 // Return transaction updated
                 self.get_transaction_by_id(transaction_id)
@@ -695,16 +736,16 @@ impl Contract {
             "Only owner can call this function"
         );
 
-        // Assert there is no active transactions
-        assert_eq!(
-            self.active_transactions,
-            0,
-            "There are active transactions, you can't transfer fees"
-        );
+        let active_transactions = self.active_transactions;
 
-        let acumulated_transaction_fees = env::account_balance() - self.storage_staking_amount();
-
-        self.pay(self.owner_id.clone(), acumulated_transaction_fees);
+        // if there are no active transactions transfer the transaction fees to the treasury account
+        if active_transactions == 0 {
+            let acumulated_transaction_fees_gas_included = env::account_balance() - self.storage_staking_amount();
+            self.pay(self.owner_id.clone(), acumulated_transaction_fees_gas_included);
+        } else {
+            let acumulated_transaction_fees = self.transaction_fees;
+            self.pay(self.owner_id.clone(), acumulated_transaction_fees);
+        }
     }
 
     // 

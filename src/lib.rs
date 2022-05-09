@@ -20,8 +20,10 @@ const STORAGE_PRICE_PER_BYTE: Balance = 10_000_000_000_000_000_000;  // source o
 /*******************************/
 /*********** STRUCTS ***********/
 /*******************************/
-pub type TransactionId = u128; 
-pub type Price = u128;
+pub type TransactionId = u128;
+// price as a float
+//pub type Price = f32;
+pub type Price = f64;
 pub type TokenId = String;
 pub type Token = String;
 
@@ -64,7 +66,7 @@ pub struct Transaction {
     // Transaction buyer ID
     pub buyer_id: AccountId, 
     // Transaction price
-    pub price: Price, 
+    pub price: u128, 
     // Token ID
     pub nft_id: TokenId, 
     // Token's contract ID
@@ -133,6 +135,7 @@ pub struct Contract {
     // Total of transactions
     pub total_transactions: u128, // should it be a bigger number? It is used as unique TransactionId
     // Contract owner, some functions could only be use by the owner
+    // Do not use owner account for transactions on esccrow, it will cause state corruption of the transactions
     pub owner_id: AccountId,
     // Transaction fee, 2% of the price, but could be changed by the owner
     pub transaction_fee: u128,
@@ -241,8 +244,10 @@ impl Contract {
     ) -> bool {
         env::log(format!("msg: {} sender_id:{} previous_owner_id: {} token_id: {} ", msg, sender_id, previous_owner_id, token_id).as_bytes());
 
-        let transaction_id = u128::from_str_radix(&msg, 36).unwrap(); // will it fail with an enough bigger number?
+        let transaction_id = u128::from_str_radix(&msg, 10).unwrap(); // will it fail with an enough bigger number?
 
+        env::log(format!("transaction_id: {}", transaction_id).as_bytes());
+        
         self.is_nft_locked(transaction_id);
 
         // It should return false so the nft_resolve_transfer let the nft stay on the contract
@@ -260,8 +265,12 @@ impl Contract {
         nft_id: TokenId,
         nft_contract_id: AccountId,
         ) -> Transaction {
+
+        // Convert f64 to u128
+        let price_u128 = (price * 1_000_000_000_000_000_000_000_000.0) as u128;
         
-        assert_at_least_required_amount(price*YOCTO_NEAR);
+        //assert_at_least_required_amount(price*YOCTO_NEAR);
+        assert_at_least_required_amount(price_u128);
         //assert!(env::attached_deposit() > price*YOCTO_NEAR, "Not enough Nears attached to cover price and Storage");
 
         let sender = env::predecessor_account_id();
@@ -274,7 +283,8 @@ impl Contract {
             creator_id: sender,
             seller_id,
             buyer_id, 
-            price: price*YOCTO_NEAR,
+            //price: price*YOCTO_NEAR,
+            price: price_u128,
             nft_id: nft_id.clone(),
             nft_contract_id: nft_contract_id.clone(),
             transaction_status: TransactionStatus::TokensLocked,
@@ -310,8 +320,8 @@ impl Contract {
         //env::log("characters counted: {}", len);
         
         //TODO: modify it to take into account price
-        deposit_refund(new_transaction_size_in_bytes, price*YOCTO_NEAR, cache_size_in_bytes); // refactor price to the beginning of the function
-        
+        //deposit_refund(new_transaction_size_in_bytes, price*YOCTO_NEAR, cache_size_in_bytes); // refactor price to the beginning of the function
+        deposit_refund(new_transaction_size_in_bytes, price_u128, cache_size_in_bytes); 
         transaction
     }
     
@@ -986,6 +996,7 @@ impl Contract {
         let token_id = transaction.nft_id.clone();
         
         match status {
+            // | TransactionStatus::TokensAndNFTLocked
             TransactionStatus::Payed => {
                 let receiver_id = transaction.buyer_id.clone();  // check if someone can mess up with the contract by swapping the buyer and seller id
                 self.transfer_nft_from_scrow(receiver_id, nft_contract_id, token_id, transaction_id);

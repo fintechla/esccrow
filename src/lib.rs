@@ -11,11 +11,13 @@ use std::collections::HashMap;
 //use near_sdk::env::storage_usage;
 
 const NO_DEPOSIT: Balance = 0;
-const BASE_GAS: Gas =  3_000_000_000_000;
-const TRANSFER_NFT_GAS: Gas = 11_000_000_000_000; // transfer NFT cost aprox 1.4 Tgas? ** error of the NFT cat
+//const BASE_GAS: Gas =  Gas(3_000_000_000_000);
+const TRANSFER_NFT_GAS: Gas = Gas(11_000_000_000_000); // transfer NFT cost aprox 1.4 Tgas? ** error of the NFT cat
 const YOCTO_NEAR: u128 = 1_000_000_000_000_000_000_000_000; // 1 followed by 24 zeros
 const ONE_YOCTO: u128 = 1;
 const STORAGE_PRICE_PER_BYTE: Balance = 10_000_000_000_000_000_000;  // source of this number: https://docs.near.org/docs/concepts/storage-staking
+
+//const ONE_MINUTE: u64 = 60000000000; // test this value
 
 /*******************************/
 /*********** STRUCTS ***********/
@@ -33,7 +35,8 @@ pub enum TransactionStatus {
     Pending,   // eliminate this status?
     TokensLocked,
     TokensAndNFTLocked,
-    Payed,
+    Payed,  // eliminate this status?
+    NftTransfered,
     Completed,
     Cancelled,
     CancelledandPayed,
@@ -66,7 +69,9 @@ pub struct Transaction {
     // Transaction buyer ID
     pub buyer_id: AccountId, 
     // Transaction price
-    pub price: u128, 
+    pub price: u128,
+    // Current transaction fee
+    pub fee: u128, 
     // Token ID
     pub nft_id: TokenId, 
     // Token's contract ID
@@ -75,6 +80,10 @@ pub struct Transaction {
     pub transaction_status: TransactionStatus,
     // Royalties
     pub royalties: HashMap<AccountId, u128>,
+    // Minutes the transaction will be active
+    pub duration_in_minutes: u64,
+    // Use timestamp to set transaction time.
+    pub transaction_time: u64,
 
 }
 
@@ -116,7 +125,7 @@ fn count_nonspace_chars(test: &str) -> u128 {
 //used to make sure the user attached exactly 1 yoctoNEAR
 fn assert_at_least_required_amount(amount: Balance) {
     assert!(
-        env::attached_deposit() >= amount,
+        env::attached_deposit() >= amount + YOCTO_NEAR/100,
         "Requires attached deposit to cover required amount",
     )
 }
@@ -172,7 +181,7 @@ impl Contract {
             // Set the owner_id field equal to the passed in owner_id
             owner_id: owner_id.clone(),
             // 1% of the price by default
-            transaction_fee: 1,
+            transaction_fee: 10, // 10 is equivalente to 1%
             transaction_fees: 0,
             // Storage keys are simply the prefixes used for the collections. This helps avoid data collision
             transactions_per_account: LookupMap::new(StorageKeys::TransactionsPerAccount),
@@ -242,11 +251,11 @@ impl Contract {
         token_id: TokenId,
         msg: String,
     ) -> bool {
-        env::log(format!("msg: {} sender_id:{} previous_owner_id: {} token_id: {} ", msg, sender_id, previous_owner_id, token_id).as_bytes());
+        env::log_str(format!("msg: {} sender_id:{} previous_owner_id: {} token_id: {} ", msg, sender_id, previous_owner_id, token_id).as_str());
 
         let transaction_id = u128::from_str_radix(&msg, 10).unwrap(); // will it fail with an enough bigger number?
 
-        env::log(format!("transaction_id: {}", transaction_id).as_bytes());
+        env::log_str(format!("transaction_id: {}", transaction_id).as_str());
         
         self.is_nft_locked(transaction_id);
 
@@ -264,6 +273,7 @@ impl Contract {
         price: Price,
         nft_id: TokenId,
         nft_contract_id: AccountId,
+        duration_in_minutes: u64,
         ) -> Transaction {
 
         // Convert f64 to u128
@@ -285,10 +295,13 @@ impl Contract {
             buyer_id, 
             //price: price*YOCTO_NEAR,
             price: price_u128,
+            fee: self.transaction_fee,
             nft_id: nft_id.clone(),
             nft_contract_id: nft_contract_id.clone(),
             transaction_status: TransactionStatus::TokensLocked,
             royalties: HashMap::new(),
+            duration_in_minutes: duration_in_minutes,
+            transaction_time: env::block_timestamp(),
         };
 
         // Update number of transactions
@@ -313,7 +326,7 @@ impl Contract {
         let final_storage_usage = env::storage_usage();
         let new_transaction_size_in_bytes = final_storage_usage - initial_storage_usage;
 
-        let len : u128 = count_nonspace_chars(&(nft_id+&nft_contract_id));  //check how many chars this function is counting
+        let len : u128 = count_nonspace_chars(&(nft_id+&nft_contract_id.as_str()));  //check how many chars this function is counting
         //This is to take into account the storage staking for traking confirmed nfts
         let cache_size_in_bytes = 180 + len*2;  // untested feature **********************************
 
@@ -336,18 +349,18 @@ impl Contract {
 
         let nft_data_promise = ext_contract_::nft_token(
             token_id,
-            &nft_contract_id, // contract account id 
+            nft_contract_id, // contract account id 
             NO_DEPOSIT, // yocto NEAR to attach
-            5_000_000_000_000, // gas to attach
+            Gas(5_000_000_000_000), // gas to attach
          );
 
-         env::log(("Contract call to nft_token completed".to_string()).as_bytes());
+         env::log_str(("Contract call to nft_token completed".to_string()).as_str());
 
          nft_data_promise.then(ext_self::on_set_royalties_data(
             transaction_id,
-            &env::current_account_id(), // this contract's account id
+            env::current_account_id(), // this contract's account id
             NO_DEPOSIT, // yocto NEAR to attach to the callback
-            5_000_000_000_000 // gas to attach to the callback
+            Gas(5_000_000_000_000) // gas to attach to the callback
         ));
     }
     
@@ -381,20 +394,23 @@ impl Contract {
 
                     for (key, value) in royalties.royalty.iter() {
                         // log key
-                        env::log(key.as_bytes());
+                        env::log_str(key.as_str());
                         // log value
-                        env::log(value.to_string().as_bytes());
+                        env::log_str(value.to_string().as_str());
+
+                        // converting key to AccountId
+                        let account_as_key: AccountId = key.to_string().parse().unwrap();
 
                         royalty_map.insert(
-                            // save key as string
-                            key.to_string(),
+                            // save key as AccountId
+                            account_as_key,
                             // save value as u128
                             value.to_string().parse::<u128>().unwrap(),
                         );
                     }
                     // log royalty map
-                    env::log(near_sdk::serde_json::to_string(&royalty_map).unwrap().as_bytes());
-                    env::log(format!("{:?}", royalties).as_bytes());
+                    env::log_str(near_sdk::serde_json::to_string(&royalty_map).unwrap().as_str());
+                    env::log_str(format!("{:?}", royalties).as_str());
                     // inset royalties map to transaction object
                     let mut transaction = self.get_transaction_by_id(transaction_id);
                     transaction.royalties = royalty_map;
@@ -467,7 +483,7 @@ impl Contract {
 
         // NEAR payouts
         for (receiver_id, amount) in payout_iter {
-            Promise::new(receiver_id.to_string()).transfer(amount.0);
+            Promise::new(receiver_id.clone()).transfer(amount.0);
         };
     }
 
@@ -527,7 +543,8 @@ impl Contract {
     pub fn get_transaction_fee(&self, transaction_id: TransactionId) -> u128 {
         let transaction = self.get_transaction_by_id(transaction_id);
         let price = transaction.price;
-        (price/100) * self.transaction_fee
+        // transaction_fee is always an interger part of one thousandth
+        (price/1000) * self.transaction_fee
     }
 
     // It return the transaction fee in yocto near
@@ -543,7 +560,9 @@ impl Contract {
 
         // Only the owner can change the transaction fee
         if env::predecessor_account_id() == self.owner_id {
+
             self.transaction_fee = new_transaction_fee;
+            
         } else {
             panic!("Only the owner can change the transaction fee");
         }
@@ -613,14 +632,14 @@ impl Contract {
         let price = transaction.price;
 
         match status {
-            TransactionStatus::TokensAndNFTLocked => {
+            TransactionStatus::NftTransfered => {
                 //let receiver_id = transaction.seller_id.clone();  // check if someone can mess up with the contract by swapping the buyer and seller id
                 
                 let transaction_fee = self.get_transaction_fee(transaction_id);
                 // update transaction_fees
                 self.transaction_fees += transaction_fee;
 
-                transaction.transaction_status = TransactionStatus::Payed;
+                transaction.transaction_status = TransactionStatus::Completed;
 
                 // Update transaction in storage
                 self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
@@ -655,16 +674,16 @@ impl Contract {
 
                 result_pay.then(ext_self::on_pay_cancelled(
                     transaction_id.clone(),
-                    &env::current_account_id(), // this contract's account id
+                    env::current_account_id(), // this contract's account id
                     0, // yocto NEAR to attach to the callback
-                    5_000_000_000_000 // gas to attach to the callback
+                    Gas(5_000_000_000_000) // gas to attach to the callback
                 ));
 
                 // Return transaction updated
                 self.get_transaction_by_id(transaction_id)
             },
             _ => {
-                env::log(("Transaction must be ready to be completed or cancelled to call this function".to_string()).as_bytes());
+                env::log_str(&"NTF must be taken out by buyer or transaction must be cancelled to call this function".to_string());
                 // Return transaction no updated
                 self.get_transaction_by_id(transaction_id)
             }
@@ -770,7 +789,7 @@ impl Contract {
         confirmed_nfts.iter().for_each(|nft_id| {
             confirmed_nfts_vec.push(nft_id);
         });
-        env::log(format!("confirmed_nfts: {:?}", confirmed_nfts_vec).as_bytes());
+        env::log_str(format!("confirmed_nfts: {:?}", confirmed_nfts_vec).as_str());
     }
     
     // Function that tells you if the nft belongs to the user
@@ -789,10 +808,10 @@ impl Contract {
         let nft_contract_id = transaction.nft_contract_id;
 
         // Save NFT in storage
-        self.confirmed_nfts.insert(&(token_id.clone()+&nft_contract_id));
+        self.confirmed_nfts.insert(&(token_id.clone()+&nft_contract_id.as_str()));
 
         // Should not be possible to confirm a nft twice
-        assert!(self.confirmed_nfts.contains(&(token_id.clone()+&nft_contract_id)), "NFT already locked in other transaction");
+        assert!(self.confirmed_nfts.contains(&(token_id.clone()+&nft_contract_id.as_str())), "NFT already locked in other transaction");
 
         // Storage management
         //let final_storage_usage = env::storage_usage();
@@ -805,18 +824,18 @@ impl Contract {
         
         let nft_number = ext_contract_::nft_token(
             token_id,
-            &nft_contract_id, // contract account id 
+            nft_contract_id, // contract account id 
             NO_DEPOSIT, // yocto NEAR to attach
-            5_000_000_000_000, // gas to attach
+            Gas(5_000_000_000_000), // gas to attach
          );
 
-         env::log(("Contract call to nft_token completed".to_string()).as_bytes());
+         env::log_str(&"Contract call to nft_token completed".to_string());
 
          nft_number.then(ext_self::on_is_nft_locked(
             transaction_id,
-            &env::current_account_id(), // this contract's account id
+            env::current_account_id(), // this contract's account id
             NO_DEPOSIT, // yocto NEAR to attach to the callback
-            5_000_000_000_000 // gas to attach to the callback
+            Gas(5_000_000_000_000) // gas to attach to the callback
         ));
         }
     
@@ -831,21 +850,21 @@ impl Contract {
                 // Eliminate transaction from confirmed_nfts
                 let token_id = self.get_transaction_by_id(transaction_id).nft_id;
                 let nft_contract_id = self.get_transaction_by_id(transaction_id).nft_contract_id;
-                self.confirmed_nfts.remove(&(token_id+&nft_contract_id));
+                self.confirmed_nfts.remove(&(token_id+&nft_contract_id.as_str()));
                 unreachable!()
             },
             PromiseResult::Failed => {
                 // Eliminate transaction from confirmed_nfts
                 let token_id = self.get_transaction_by_id(transaction_id).nft_id;
                 let nft_contract_id = self.get_transaction_by_id(transaction_id).nft_contract_id;
-                self.confirmed_nfts.remove(&(token_id+&nft_contract_id));
+                self.confirmed_nfts.remove(&(token_id+&nft_contract_id.as_str()));
                 panic!("Promise failed");
             },
             PromiseResult::Successful(j) => {
                 let result: HashMap<String, serde_json::Value> = near_sdk::serde_json::from_slice(&j).unwrap();
                 match result.get("owner_id") {
                     Some(owner_account) => {
-                        if owner_account == &env::current_account_id() {
+                        if owner_account == env::current_account_id().as_str() {
                             // Change transaction status to NFT locked
                             let mut transaction = self.get_transaction_by_id(transaction_id);
                             transaction.transaction_status = TransactionStatus::TokensAndNFTLocked;
@@ -879,7 +898,7 @@ impl Contract {
             PromiseResult::Failed => "oops!".to_string(),
             PromiseResult::Successful(result) => {
                 let balance = near_sdk::serde_json::from_slice::<U128>(&result).unwrap();
-                env::log(format!("llegué hasta el final {:#?}", balance.0).as_bytes()); // remove later
+                env::log_str(format!("llegué hasta el final {:#?}", balance.0).as_str()); // remove later
                 if balance.0 > 0 {
                     "yes".to_string()
                 } else {
@@ -890,37 +909,37 @@ impl Contract {
     }
 
     // Ask for aproval to transfer NFTs
-    pub fn ask_for_approval(&self, token_id: TokenId, account_id: AccountId) {
-        let promise = ext_contract_::nft_approve(
-            token_id,
-            account_id,
-            None,
-            &"example-nft.testnet", // contract account id 
-            YOCTO_NEAR, // IT IS A PAYABLE FUNCTION, CHANGE IT TO LESS NEARS
-            BASE_GAS, // gas to attach
-        );
-        promise.then(ext_self::on_ask_for_approval(
-            &env::current_account_id(), // this contract's account id
-            0, // yocto NEAR to attach to the callback
-            5_000_000_000_000 // gas to attach to the callback
-        ));
-    }
+    //pub fn ask_for_approval(&self, token_id: TokenId, account_id: AccountId) {
+    //    let promise = ext_contract_::nft_approve(
+    //        token_id,
+    //        account_id,
+    //        None,
+    //        "example-nft.testnet", // contract account id 
+    //        YOCTO_NEAR, // IT IS A PAYABLE FUNCTION, CHANGE IT TO LESS NEARS
+    //        BASE_GAS, // gas to attach
+    //    );
+    //    promise.then(ext_self::on_ask_for_approval(
+    //        env::current_account_id(), // this contract's account id
+    //        0, // yocto NEAR to attach to the callback
+    //        Gas(5_000_000_000_000) // gas to attach to the callback
+    //    ));
+    //}
 
-    pub fn on_ask_for_approval(&self) -> String {   //change name of this callback function
-        assert_eq!(
-            env::promise_results_count(),
-            1,
-            "This is a callback method"
-        );
+    //pub fn on_ask_for_approval(&self) -> String {   //change name of this callback function
+    //    assert_eq!(
+    //        env::promise_results_count(),
+    //        1,
+    //        "This is a callback method"
+    //    );
         // Handle the result from the cross contract call this method is a callback for
-        match env::promise_result(0) {
-            PromiseResult::NotReady => unreachable!(),
-            PromiseResult::Failed => "oops!".to_string(),
-            PromiseResult::Successful(_result) => {
-                "Success!".to_string()
-            },
-        }
-    }
+    //    match env::promise_result(0) {
+    //        PromiseResult::NotReady => unreachable!(),
+    //        PromiseResult::Failed => "oops!".to_string(),
+    //        PromiseResult::Successful(_result) => {
+    //            "Success!".to_string()
+    //        },
+    //    }
+    //}
 
     pub fn on_transfer_locked_nft(&mut self, transaction_id: TransactionId) -> String {
         assert_eq!(
@@ -970,15 +989,15 @@ impl Contract {
             token_id,
             0, // non used argument
             None,
-            &nft_contract_id, // contract account id 
+            nft_contract_id, // contract account id 
             ONE_YOCTO, // 
             TRANSFER_NFT_GAS, // gas to attach
         );
         promise.then(ext_self::on_transfer_locked_nft(
             transaction_id,
-            &env::current_account_id(), // this contract's account id
+            env::current_account_id(), // this contract's account id
             0, // yocto NEAR to attach to the callback
-            5_000_000_000_000 // gas to attach to the callback
+            Gas(5_000_000_000_000) // gas to attach to the callback
         ));
     }
 
@@ -997,11 +1016,11 @@ impl Contract {
         
         match status {
             // | TransactionStatus::TokensAndNFTLocked
-            TransactionStatus::Payed => {
+            TransactionStatus::TokensAndNFTLocked => {
                 let receiver_id = transaction.buyer_id.clone();  // check if someone can mess up with the contract by swapping the buyer and seller id
                 self.transfer_nft_from_scrow(receiver_id, nft_contract_id, token_id, transaction_id);
                 // Update transaction status
-                transaction.transaction_status = TransactionStatus::Completed;
+                transaction.transaction_status = TransactionStatus::NftTransfered;
                 // Update transaction in storage
                 self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
                 // Update transaction fees
@@ -1010,26 +1029,27 @@ impl Contract {
                 // Eliminate transaction from confirmed_nfts
                 let token_id = self.get_transaction_by_id(transaction_id).nft_id;
                 let nft_contract_id = self.get_transaction_by_id(transaction_id).nft_contract_id;
-                self.confirmed_nfts.remove(&(token_id+&nft_contract_id));
+                self.confirmed_nfts.remove(&(token_id+&nft_contract_id.as_str()));
                 // Return transaction
                 //let transaction_updated = self.get_transaction_by_id(transaction_id.clone());
             },
-            TransactionStatus::Cancelled => {
-                let receiver_id = transaction.seller_id.clone();
-                self.transfer_nft_from_scrow(receiver_id, nft_contract_id, token_id, transaction_id);
+            // Im ruling out cancelled arm because it is not possible to cancel after nft is locked
+            //TransactionStatus::Cancelled => {
+            //    let receiver_id = transaction.seller_id.clone();
+            //    self.transfer_nft_from_scrow(receiver_id, nft_contract_id, token_id, transaction_id);
                 // Update transaction status
-                transaction.transaction_status = TransactionStatus::CancelledAndFinished;
+            //    transaction.transaction_status = TransactionStatus::CancelledAndFinished;
                 // Update transaction in storage
-                self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
+            //    self.transaction_by_id.insert(&transaction.transaction_id, &transaction);
                 // Eliminate transaction from confirmed_nfts
-                let token_id = self.get_transaction_by_id(transaction_id).nft_id;
-                let nft_contract_id = self.get_transaction_by_id(transaction_id).nft_contract_id;
-                self.confirmed_nfts.remove(&(token_id+&nft_contract_id));
+            //    let token_id = self.get_transaction_by_id(transaction_id).nft_id;
+            //    let nft_contract_id = self.get_transaction_by_id(transaction_id).nft_contract_id;
+            //    self.confirmed_nfts.remove(&(token_id+&nft_contract_id));
                 // Return transaction
                 //let transaction_updated = self.get_transaction_by_id(transaction_id.clone());
-            },
+            //},
             _ => {
-                env::log("A transaction has to be paid before trying to reclaim the NFT".to_string().as_bytes());
+                env::log_str("NFT has not been locked yet".to_string().as_str());
                 // Return transaction
                 //let transaction_no_updated = self.get_transaction_by_id(transaction_id.clone());
             }
@@ -1072,7 +1092,7 @@ fn nft_token(&self, token_id: TokenId);
 #[ext_contract(ext_self)]
 pub trait MyContract {
     fn my_callback(&self) -> String;
-    fn on_ask_for_approval(&self) -> String;
+    //fn on_ask_for_approval(&self) -> String;
     fn on_transfer_locked_nft(&mut self, transaction_id: TransactionId) -> String;
     fn on_is_nft_locked(&self, transaction_id: TransactionId) -> bool;
     fn on_pay_completed(&mut self, transaction_id: TransactionId) -> ();

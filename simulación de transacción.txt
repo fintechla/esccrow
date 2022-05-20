@@ -28,4 +28,8 @@ near call esccrow.testaccount14.testnet pay_transaction '{"transaction_id":3}' -
 near view paras-token-v2.testnet nft_tokens_for_owner '{"account_id":"usuario01.testaccount14.testnet"}' --account-id usuario01.testaccount14.testnet
 
 
+**********************
+
+near call nft-v01-400-pre-5.escrow-ftl.testnet create_transaction '{"seller_id": "usuario02.testaccount14.testnet", "buyer_id": "usuario01.testaccount14.testnet", "price": 5, "nft_id": "210:17", "nft_contract_id": "paras-token-v2.testnet"}' --account-id testaccount15.testnet
+
 

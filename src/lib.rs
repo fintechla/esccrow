@@ -690,7 +690,7 @@ impl Contract {
         } 
     }
 
-    pub fn pay(&self, receiver_id: AccountId, amount: u128) -> Promise {  //should be private, and only be called under some conditions, do i need &self? as argument
+    fn pay(&self, receiver_id: AccountId, amount: u128) -> Promise {  //should be private, and only be called under some conditions, do i need &self? as argument
         Promise::new(receiver_id).transfer(amount)
     }
 
